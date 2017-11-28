@@ -12,3 +12,43 @@ Step1：找到目标代码虚拟地址
 Step2：找到目标代码的物理地址
 Step3：利用漏洞修改内核文件
 Step4：调用setresuid(0,0,0)提权
+
+
+## 内核bug越界执行
+### 模式
+```
+static int __sock_diag_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
+{
+    int err;
+    struct sock_diag_req *req = NLMSG_DATA(nlh);
+    struct sock_diag_handler *hndl;
+
+    if (nlmsg_len(nlh) < sizeof(*req))
+        return -EINVAL;
+
+    hndl = sock_diag_lock_handler(req->sdiag_family);
+    if (hndl == NULL)
+        err = -ENOENT;
+    else
+        err = hndl->dump(skb, nlh); //越界执行
+        sock_diag_unlock_handler(hndl);
+    return err;
+}
+static const inline struct sock_diag_handler *sock_diag_lock_handler(int family)
+{
+        if (sock_diag_handlers[family] == NULL)
+                request_module("net-pf-%d-proto-%d-type-%d", PF_NETLINK,
+                                NETLINK_SOCK_DIAG, family);
+
+        mutex_lock(&sock_diag_table_mutex);
+        return sock_diag_handlers[family];//越界.
+}
+```
+### 漏洞利用
+如果没有开启PXN的情况下：
+    通过调试内核，找到sock_diag_handlers附近取值范围固定为一个较小的值[A , B]，这样将[A , B]这段内存mmap到用户空间，并在B端写入提权code，只要取合适的family，满足sock_diag_handlers[family]->dump刚好为那个固定的较小的值，利用滑梯到B执行提权code：[提权](https://my.oschina.net/fgq611/blog/181812)
+    
+如果开启PXN的情况下：
+    可以尝试在内核态调用set_fs或者其他提权函数
+
+## 
